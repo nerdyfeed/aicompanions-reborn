@@ -1,0 +1,149 @@
+plugins {
+    id 'fabric-loom' version '1.6-SNAPSHOT'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group project.maven_group
+version project.mod_version
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+compileJava {
+    options.encoding = "UTF-8"
+}
+
+
+sourceSets {
+    autoclef {
+        compileClasspath += main.compileClasspath + main.runtimeClasspath + main.output
+        runtimeClasspath += main.compileClasspath + main.runtimeClasspath + main.output
+    }
+    // Tests for the autoclef sourceset, which is where the memory code lives. Added 2026-08-17: this
+    // fork had no test infrastructure at all, so MemoryGate — a guard whose whole job is to refuse
+    // things — had nothing checking that it refused the right things, and it duly produced a false
+    // negative in game. Deliberately narrow: plain JUnit over the classes that are pure logic. Do not
+    // grow this into a home for tests that need a running Minecraft.
+    test {
+        compileClasspath += autoclef.compileClasspath + autoclef.output
+        runtimeClasspath += autoclef.compileClasspath + autoclef.output
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven {
+         name = 'ParchmentMC'
+         url = 'https://maven.parchmentmc.org'
+    }
+
+    maven {
+        name = 'Quilt Snapshots'
+        url = 'https://maven.quiltmc.org/repository/snapshot'
+    }
+
+    maven {
+        url = "https://maven.quiltmc.org/repository/release/"
+    }
+
+    mavenLocal()
+
+    flatDir {
+        dir 'libs'
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.layered() {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-1.20.1:2023.09.03@zip")
+    }
+    modImplementation "net.fabricmc:fabric-loader:0.15.6"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.92.1+1.20.1"
+    implementation 'com.google.code.findbugs:jsr305:3.0.2'
+
+    // The memory engine from ../../ai-companion-memory, staged into libs/.
+    //
+    // compileOnly, NOT implementation: the consumer mod already nests this jar (JiJ), and Fabric
+    // puts every nested jar on one classloader, so the classes are there at runtime. Declaring it
+    // implementation here would bundle a second copy — two versions of the same scorer on the
+    // classpath is precisely the silent-divergence failure this engine exists to prevent.
+    compileOnly 'libs:aicompanion-memory:0.4.0'
+
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.16.0'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.16.0'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.16.0'
+
+    shadow('com.fasterxml.jackson.core:jackson-core:2.16.0')
+    shadow('com.fasterxml.jackson.core:jackson-annotations:2.16.0')
+    shadow('com.fasterxml.jackson.core:jackson-databind:2.16.0')
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+    }
+}
+
+shadowJar {
+    configurations = [project.configurations.shadow]
+
+    archiveBaseName.set('PlayerEngine')
+    archiveClassifier.set('dev')
+
+    from sourceSets.main.output
+    from sourceSets.autoclef.output
+
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+
+    manifest {
+        attributes(tasks.jar.manifest.attributes)
+        attributes('MixinConfigs': 'mixins.automatone.json')
+    }
+}
+
+remapJar {
+    dependsOn("shadowJar")
+    archiveBaseName.set('PlayerEngine')
+    archiveClassifier.set('')
+    input.set(shadowJar.archiveFile)
+}
+
+java {
+    withSourcesJar()
+}
+
+javadoc {
+    options.addStringOption('Xwerror', '-quiet')
+    options.linkSource true
+    options.encoding "UTF-8"
+    source = sourceSets.main.allJava
+    classpath += sourceSets.main.compileClasspath
+}
+
+jar {
+    from sourceSets.main.output, sourceSets.autoclef.output
+
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+
+    manifest {
+        attributes(
+                'MixinConfigs': 'mixins.automatone.json',
+
+                'Implementation-Title': 'PlayerEngine',
+                'Implementation-Version': project.version
+        )
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ["-Xmaxerrs", "500000"]
+}
